@@ -66,7 +66,7 @@ class CreateBookViewModel(
     private val settings: SettingsRepository
 ) : ViewModel() {
     var idea: String = ""
-    var ageBand: AgeBand = AgeBand.AGES_3_5
+    var ageBand: AgeBand = AgeBand.AGES_9_10
     var length: StoryLength = StoryLength.SHORT
     var mood: StoryMood = StoryMood.COZY
 

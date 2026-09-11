@@ -207,9 +207,13 @@ class GeminiApiClient {
     private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String {
         val pageLength = when (age) {
             AgeBand.AGES_3_5 ->
-                "For ages 3–5: each page has 2–4 short, clear sentences with concrete words a toddler can picture. Readable aloud with warmth — not one-breath stubs."
+                "For ages 3–5: each page has 2–4 short, clear sentences with concrete words a young child can picture. Readable aloud with warmth — not one-breath stubs."
             AgeBand.AGES_6_8 ->
                 "For ages 6–8: each page has 3–5 short sentences with slightly richer vocabulary, clear feelings, and a little more plot detail."
+            AgeBand.AGES_9_10 ->
+                "For ages 9–10: each page has 4–7 sentences with engaging detail, dialogue or inner thought when natural, mild mystery or curiosity, still cozy enough for bedtime."
+            AgeBand.AGES_11_12 ->
+                "For ages 11–12: each page has 5–8 sentences with stronger voice and plot, richer description, gentle stakes resolved warmly — never graphic, romantic, or nightmare fuel."
         }
         return """
             You are StoryNest, an award-winning author-illustrator team that writes children's bedtime picture books
@@ -252,7 +256,7 @@ class GeminiApiClient {
           "pages": [
             {
               "pageNumber": 1,
-              "text": "2–4 short sentences (or a bit more for ages 6–8) of vivid page story text",
+              "text": "age-appropriate vivid page story text (length per system rules for this age band)",
               "imagePrompt": "concrete visual scene for THIS page only matching the text (setting, characters, action, lighting) — no style words"
             }
           ]
@@ -291,6 +295,8 @@ class GeminiApiClient {
         val minChars = when (age) {
             AgeBand.AGES_3_5 -> 60
             AgeBand.AGES_6_8 -> 90
+            AgeBand.AGES_9_10 -> 140
+            AgeBand.AGES_11_12 -> 180
         }
         val shortPages = story.pages.count { it.text.trim().length < minChars }
         val avg = story.pages.map { it.text.trim().length }.average()
