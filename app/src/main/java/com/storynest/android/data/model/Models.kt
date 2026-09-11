@@ -3,8 +3,8 @@ package com.storynest.android.data.model
 import kotlinx.serialization.Serializable
 
 enum class AgeBand(val label: String, val promptHint: String) {
-    AGES_3_5("3–5", "ages 3 to 5: very simple words, short sentences, concrete images"),
-    AGES_6_8("6–8", "ages 6 to 8: slightly richer vocabulary, gentle plot, clear feelings")
+    AGES_3_5("3–5", "ages 3 to 5: simple warm words, 2–4 short sentences per page, concrete actions and settings a toddler can picture"),
+    AGES_6_8("6–8", "ages 6 to 8: slightly richer vocabulary, 3–5 short sentences per page, gentle plot, clear feelings, concrete scenes")
 }
 
 enum class StoryLength(val pages: Int, val label: String) {

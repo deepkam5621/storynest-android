@@ -46,25 +46,29 @@ class GeminiApiClient {
         private const val TAG = "GeminiApi"
         private const val BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
-        /** Text story writing — current flash. */
-        const val TEXT_MODEL = "gemini-3.5-flash"
+        /** Preferred text models (skip retired 2.5-pro for new keys). */
         val TEXT_MODELS = listOf(
             "gemini-3.5-flash",
-            "gemini-3.6-flash",
             "gemini-flash-latest",
-            "gemini-3.1-flash-lite"
+            "gemini-3.6-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3.7-flash"
         )
 
         /**
-         * Image models tried in order (2026 Google AI Developer API).
-         * Prefer gemini-3.1-flash-lite-image / gemini-3.1-flash-image; fall back to 2.5 and pro.
+         * Image models tried in order. Free-tier image quota is often exhausted (HTTP 429);
+         * callers should still save story text with placeholders.
          */
         val IMAGE_MODELS = listOf(
             "gemini-3.1-flash-lite-image",
             "gemini-3.1-flash-image",
             "gemini-2.5-flash-image",
-            "gemini-3-pro-image"
+            "gemini-3-pro-image-preview",
+            "nano-banana-pro-preview"
         )
+
+        /** Pause between page illustration calls to reduce burst 429s. */
+        const val IMAGE_CALL_GAP_MS = 1750L
 
         val STYLE_LOCK = """
             Soft Western children's picture-book illustration style.
@@ -74,11 +78,22 @@ class GeminiApiClient {
             Suitable for a printed bedtime picture book. No text overlays in the image.
             Age-appropriate, calm, wholesome, cartoon-only.
         """.trimIndent().replace('\n', ' ')
+
+        const val QUOTA_IMAGE_HELP =
+            "Free-tier Gemini image quota is exhausted or rate-limited. " +
+                "Story text is saved. To get real pictures, enable billing / raise image limits at " +
+                "https://aistudio.google.com or https://ai.dev/rate-limit"
     }
 
     sealed class GeminiException(message: String, cause: Throwable? = null) : Exception(message, cause) {
         class MissingApiKey : GeminiException("Add a Gemini API key in Settings to create stories.")
-        class QuotaExceeded(detail: String) : GeminiException("Gemini quota or rate limit hit. $detail")
+        class QuotaExceeded(detail: String) : GeminiException(
+            if (detail.contains("aistudio.google.com") || detail.contains("ai.dev/rate-limit")) {
+                detail
+            } else {
+                "$QUOTA_IMAGE_HELP (${detail.take(160)})"
+            }
+        )
         class ApiError(detail: String) : GeminiException(detail)
         class ParseError(detail: String) : GeminiException(detail)
     }
@@ -89,26 +104,21 @@ class GeminiApiClient {
         withContext(Dispatchers.IO) {
             requireKey(apiKey)
             val system = buildSystemPrompt(request.ageBand, request.mood, request.length.pages)
-            val user = """
-                Story idea from parent: ${request.idea.trim()}
-
-                Write a complete picture book with exactly ${request.length.pages} pages.
-                Return ONLY valid JSON matching this schema (no markdown fences):
-                {
-                  "title": "string",
-                  "characterCard": "detailed consistent description of main characters (appearance, clothing, colors) for illustration locking",
-                  "pages": [
-                    {
-                      "pageNumber": 1,
-                      "text": "page story text for the child",
-                      "imagePrompt": "short visual scene description for this page only (no style words — style is applied separately)"
-                    }
-                  ]
+            val user = buildUserPrompt(request)
+            val text = generateTextWithFallback(apiKey, system, user, temperature = 1.05)
+            var story = parseStoryJson(text, request.length.pages)
+            if (isThinStory(story, request.ageBand)) {
+                Log.i(TAG, "Story text looks thin — running one enrich rewrite pass")
+                try {
+                    val enrichSystem = buildEnrichSystemPrompt(request.ageBand, request.mood, request.length.pages)
+                    val enrichUser = buildEnrichUserPrompt(story, request)
+                    val enriched = generateTextWithFallback(apiKey, enrichSystem, enrichUser, temperature = 1.0)
+                    story = parseStoryJson(enriched, request.length.pages)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Enrich pass skipped: ${e.message}")
                 }
-            """.trimIndent()
-
-            val text = generateTextWithFallback(apiKey, system, user)
-            parseStoryJson(text, request.length.pages)
+            }
+            story
         }
 
     suspend fun regeneratePageText(
@@ -122,19 +132,23 @@ class GeminiApiClient {
     ): Pair<String, String> = withContext(Dispatchers.IO) {
         requireKey(apiKey)
         val system = """
-            You rewrite a single page of a children's bedtime picture book.
+            You rewrite a single page of an award-winning children's bedtime picture book.
             Keep age-appropriate, gentle, no gore/horror/romance. Tone down action.
-            Return ONLY JSON: {"text":"...","imagePrompt":"short scene description"}
+            Use vivid sensory detail, concrete actions, and emotional warmth.
+            Page text: 2–4 short sentences (a bit more if ages 6–8).
+            imagePrompt must be a concrete visual scene matching THIS page's text
+            (setting, pose, lighting, props — no style words).
+            Return ONLY JSON: {"text":"...","imagePrompt":"concrete scene for this page"}
         """.trimIndent()
         val user = """
             Book title: $title
-            Characters: $characterCard
+            Characters (keep fixed look): $characterCard
             Age/mood context: $ageBand / $mood
             Page number: $pageNumber
             Current text: $previousText
             Rewrite this page's text and imagePrompt, keeping continuity with the same characters.
         """.trimIndent()
-        val raw = generateTextWithFallback(apiKey, system, user)
+        val raw = generateTextWithFallback(apiKey, system, user, temperature = 1.05)
         val cleaned = stripFences(raw)
         val obj = json.parseToJsonElement(cleaned).jsonObject
         val text = obj["text"]?.jsonPrimitive?.contentOrNull
@@ -155,6 +169,7 @@ class GeminiApiClient {
         requireKey(apiKey)
         val prompt = buildImagePrompt(characterCard, pageScene, pageNumber)
         var lastError: String? = null
+        var hitQuota = false
         for (model in IMAGE_MODELS) {
             try {
                 val bytes = generateImageBytes(apiKey, model, prompt)
@@ -164,13 +179,19 @@ class GeminiApiClient {
                 }
                 lastError = "Empty image from $model"
             } catch (e: GeminiException.QuotaExceeded) {
-                throw e
+                hitQuota = true
+                lastError = e.message
+                Log.w(TAG, "Image model $model quota: ${e.message}")
+                // Try remaining models once; free tier often blocks all image models.
             } catch (e: Exception) {
                 lastError = "${e.message}"
                 Log.w(TAG, "Image model $model failed: ${e.message}")
             }
         }
         Log.w(TAG, "All image models failed: $lastError")
+        if (hitQuota) {
+            throw GeminiException.QuotaExceeded(lastError ?: QUOTA_IMAGE_HELP)
+        }
         null
     }
 
@@ -183,30 +204,113 @@ class GeminiApiClient {
         Single full-bleed illustration, no speech bubbles, no written words, no watermarks.
         """.trimIndent()
 
-    private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String = """
-        You are StoryNest, a children's bedtime picture-book author.
-        Write age-appropriate stories for ${age.promptHint}.
-        Mood: ${mood.promptHint}.
-        Exactly $pages pages. Gentle endings. No gore, horror, romance, bullying, or scary villains.
-        Tone down action; keep everything soft and reassuring for bedtime.
-        Each page text should be short enough to read aloud in one breath or two.
-        characterCard must be detailed enough to keep illustrations consistent across pages.
+    private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String {
+        val pageLength = when (age) {
+            AgeBand.AGES_3_5 ->
+                "For ages 3–5: each page has 2–4 short, clear sentences with concrete words a toddler can picture. Readable aloud with warmth — not one-breath stubs."
+            AgeBand.AGES_6_8 ->
+                "For ages 6–8: each page has 3–5 short sentences with slightly richer vocabulary, clear feelings, and a little more plot detail."
+        }
+        return """
+            You are StoryNest, an award-winning author-illustrator team that writes children's bedtime picture books
+            in the spirit of classic gem-quality picture books (think vivid scenes, heart, and a clear arc —
+            never vague filler like "they felt happy" with no action).
+
+            Audience: ${age.promptHint}.
+            Mood: ${mood.promptHint}.
+            Exactly $pages pages. Gentle endings. No gore, horror, romance, bullying, or scary villains.
+            Soften conflict; keep everything safe and reassuring for bedtime.
+
+            STORYCRAFT (required):
+            - Clear plot arc across the book: setup → a gentle wish or small problem → soft adventure / trying → cozy resolution and bedtime comfort.
+            - Every page has a distinct purpose (introduce world, show the wish, first step, discovery, turning point, help from a friend, quiet win, snuggle home).
+            - Vivid sensory detail: what they see, hear, touch, smell — concrete settings and actions, not abstract emotion-only lines.
+            - Emotional warmth and memorable moments a parent will enjoy reading aloud.
+            - Memorable title (specific and charming, not generic like "A Fun Day").
+            - characterCard: FIXED look lock for illustrations — species/kind, hair/fur color & style, clothing colors & items, size, signature props. Same details every page.
+            - Each imagePrompt: a concrete visual scene that MATCHES that page's text (who, where, pose, props, time-of-day/lighting). No style words — style is applied separately.
+
+            PAGE TEXT LENGTH:
+            $pageLength
+            Do NOT use vague filler. Prefer specific verbs and settings ("climbed the mossy garden wall", "whispered to the sleepy moon").
+
+            Output ONLY valid JSON matching the schema the user provides. No markdown fences, no commentary.
+        """.trimIndent()
+    }
+
+    private fun buildUserPrompt(request: CreateBookRequest): String = """
+        Story idea from parent: ${request.idea.trim()}
+
+        Write a complete picture book with exactly ${request.length.pages} pages.
+        Make it feel like a real bedtime picture book: clear arc, sensory detail, distinct page purposes, cozy ending.
+        Invent a memorable title and a detailed characterCard (hair/fur, clothes, colors, species/kind, props).
+
+        Return ONLY valid JSON matching this schema (no markdown fences):
+        {
+          "title": "memorable specific title",
+          "characterCard": "fixed look details: species/kind, hair or fur, clothing colors, signature props — enough to keep every illustration consistent",
+          "pages": [
+            {
+              "pageNumber": 1,
+              "text": "2–4 short sentences (or a bit more for ages 6–8) of vivid page story text",
+              "imagePrompt": "concrete visual scene for THIS page only matching the text (setting, characters, action, lighting) — no style words"
+            }
+          ]
+        }
     """.trimIndent()
+
+    private fun buildEnrichSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String = """
+        You improve a children's bedtime picture-book draft that is too thin or vague.
+        Keep the same characters, title idea, and overall plot — but enrich every page with
+        vivid sensory detail, concrete actions/settings, and a clear arc (setup → wish/problem →
+        gentle adventure → cozy resolution). Mood: ${mood.promptHint}. Audience: ${age.promptHint}.
+        Exactly $pages pages. Keep characterCard fixed-look details. Each imagePrompt must match its page text.
+        Return ONLY the same JSON schema. No markdown.
+    """.trimIndent()
+
+    private fun buildEnrichUserPrompt(story: GeneratedStory, request: CreateBookRequest): String {
+        val pagesJson = story.pages.joinToString(",\n") { p ->
+            """{"pageNumber":${p.pageNumber},"text":${JsonPrimitive(p.text)},"imagePrompt":${JsonPrimitive(p.imagePrompt)}}"""
+        }
+        return """
+            Parent idea: ${request.idea.trim()}
+            Current draft (enrich, do not shrink):
+            {
+              "title": ${JsonPrimitive(story.title)},
+              "characterCard": ${JsonPrimitive(story.characterCard)},
+              "pages": [
+                $pagesJson
+              ]
+            }
+            Rewrite so each page has richer readable-aloud text and a concrete imagePrompt. Same page count (${request.length.pages}).
+        """.trimIndent()
+    }
+
+    private fun isThinStory(story: GeneratedStory, age: AgeBand): Boolean {
+        if (story.pages.isEmpty()) return true
+        val minChars = when (age) {
+            AgeBand.AGES_3_5 -> 60
+            AgeBand.AGES_6_8 -> 90
+        }
+        val shortPages = story.pages.count { it.text.trim().length < minChars }
+        val avg = story.pages.map { it.text.trim().length }.average()
+        return shortPages >= (story.pages.size + 1) / 2 || avg < minChars
+    }
 
     private fun requireKey(apiKey: String) {
         if (apiKey.isBlank()) throw GeminiException.MissingApiKey()
     }
 
-
     private suspend fun generateTextWithFallback(
         apiKey: String,
         system: String,
-        user: String
+        user: String,
+        temperature: Double = 1.05
     ): String {
         var last: Exception? = null
         for (model in TEXT_MODELS) {
             try {
-                return generateText(apiKey, model, system, user)
+                return generateText(apiKey, model, system, user, temperature)
             } catch (e: GeminiException.QuotaExceeded) {
                 throw e
             } catch (e: Exception) {
@@ -221,7 +325,8 @@ class GeminiApiClient {
         apiKey: String,
         model: String,
         system: String,
-        user: String
+        user: String,
+        temperature: Double
     ): String {
         val body = buildJsonObject {
             put("systemInstruction", buildJsonObject {
@@ -238,7 +343,7 @@ class GeminiApiClient {
                 })
             })
             put("generationConfig", buildJsonObject {
-                put("temperature", 0.85)
+                put("temperature", temperature)
                 put("responseMimeType", "application/json")
             })
         }
@@ -252,7 +357,6 @@ class GeminiApiClient {
         model: String,
         prompt: String
     ): ByteArray? {
-        // Primary: generateContent with IMAGE response modality
         val body = buildJsonObject {
             put("contents", buildJsonArray {
                 add(buildJsonObject {
@@ -372,14 +476,16 @@ class GeminiApiClient {
                 pages.add(
                     GeneratedPage(
                         pageNumber = pages.size + 1,
-                        text = "And then everyone snuggled close, safe and warm.",
-                        imagePrompt = "Characters resting peacefully together at bedtime"
+                        text = "And then everyone snuggled close, safe and warm under the soft blanket.",
+                        imagePrompt = "Characters resting peacefully together at bedtime in a cozy room with soft lamp light"
                     )
                 )
             }
             story.copy(
                 title = story.title.ifBlank { "Bedtime Story" },
-                characterCard = story.characterCard.ifBlank { "Friendly soft cartoon characters in cozy clothes" },
+                characterCard = story.characterCard.ifBlank {
+                    "Friendly soft cartoon child with rounded cheeks, warm brown hair, striped pajamas, and a small stuffed animal"
+                },
                 pages = pages
             )
         } catch (e: Exception) {
@@ -393,7 +499,6 @@ class GeminiApiClient {
             t = t.removePrefix("```json").removePrefix("```JSON").removePrefix("```").trim()
             if (t.endsWith("```")) t = t.removeSuffix("```").trim()
         }
-        // Sometimes model wraps with prose — find first { last }
         val start = t.indexOf('{')
         val end = t.lastIndexOf('}')
         if (start >= 0 && end > start) t = t.substring(start, end + 1)

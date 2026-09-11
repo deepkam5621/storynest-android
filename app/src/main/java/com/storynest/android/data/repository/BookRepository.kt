@@ -10,6 +10,7 @@ import com.storynest.android.data.model.CreateBookRequest
 import com.storynest.android.data.model.PageDetail
 import com.storynest.android.data.prefs.SettingsRepository
 import com.storynest.android.data.remote.GeminiApiClient
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.util.UUID
@@ -100,6 +101,9 @@ class BookRepository(
 
             story.pages.forEachIndexed { index, page ->
                 val pageNum = index + 1
+                if (index > 0) {
+                    delay(GeminiApiClient.IMAGE_CALL_GAP_MS)
+                }
                 onProgress(
                     GenerationProgress(
                         stage = "Illustrating page $pageNum of ${story.pages.size}…",
@@ -120,13 +124,14 @@ class BookRepository(
                         imagePath = files.savePlaceholder(bookId, pageNum, story.title, page.text)
                         isPlaceholder = true
                         imageWarning =
-                            "Image model unavailable or failed. Saved cozy placeholder cards. Check Settings / free-tier limits."
+                            "Pictures unavailable right now. Story text is saved with cozy placeholders. " +
+                                "Free-tier Gemini often has no image quota — enable billing at https://aistudio.google.com " +
+                                "or check https://ai.dev/rate-limit"
                     }
                 } catch (e: GeminiApiClient.GeminiException.QuotaExceeded) {
                     imagePath = files.savePlaceholder(bookId, pageNum, story.title, page.text)
                     isPlaceholder = true
-                    imageWarning =
-                        "Gemini rate/quota limit while illustrating. Text is saved; placeholders used for remaining images. ${e.message}"
+                    imageWarning = e.message ?: GeminiApiClient.QUOTA_IMAGE_HELP
                     // Fill remaining with placeholders quickly
                     pageEntities.add(
                         PageEntity(
@@ -197,7 +202,9 @@ class BookRepository(
 
             if (!anyRealImage && imageWarning == null) {
                 imageWarning =
-                    "Could not reach an image-capable Gemini model. Story text is saved with placeholder art. Try gemini-2.5-flash-image access or check your API key plan."
+                    "Could not generate pictures (image models failed or free-tier image quota is 0). " +
+                        "Story text is saved with placeholders. Enable billing / image quota at " +
+                        "https://aistudio.google.com or see https://ai.dev/rate-limit"
             }
 
             val cover = pageEntities.firstOrNull()?.imagePath

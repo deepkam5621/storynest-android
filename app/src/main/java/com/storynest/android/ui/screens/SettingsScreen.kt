@@ -134,9 +134,10 @@ fun SettingsScreen(
             Text("Get a free key", style = MaterialTheme.typography.titleMedium)
             Text(
                 "Open Google AI Studio, create an API key, then paste it above.\n\n" +
-                    "Free-tier note: Gemini free quotas are limited (especially image generation). " +
-                    "If you hit rate limits, StoryNest still saves the full story text and uses " +
-                    "cozy placeholder illustrations so reading works offline. Paid tiers unlock more images.",
+                    "Quota note: story text uses the free Gemini text tier. Pictures need separate " +
+                    "image quota (or billing). Free-tier image limits are often exhausted (HTTP 429) — " +
+                    "StoryNest still saves the full story with cozy placeholders so reading works offline. " +
+                    "Enable billing or raise image limits at aistudio.google.com / ai.dev/rate-limit.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
