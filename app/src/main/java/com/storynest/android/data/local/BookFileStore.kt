@@ -24,11 +24,41 @@ class BookFileStore(private val context: Context) {
     fun pageImageFile(bookId: String, pageNumber: Int): File =
         File(bookDir(bookId), "page_${pageNumber.toString().padStart(2, '0')}.png")
 
+    fun pageImageFileJpg(bookId: String, pageNumber: Int): File =
+        File(bookDir(bookId), "page_${pageNumber.toString().padStart(2, '0')}.jpg")
+
+    /** Saves raw PNG bytes (Gemini path). */
     fun savePng(bookId: String, pageNumber: Int, bytes: ByteArray): String {
+        clearPageImageVariants(bookId, pageNumber)
         val file = pageImageFile(bookId, pageNumber)
         file.parentFile?.mkdirs()
         file.writeBytes(bytes)
         return file.absolutePath
+    }
+
+    /**
+     * Saves JPEG or PNG bytes from any image provider.
+     * Detects format by magic bytes; writes .jpg or .png accordingly.
+     */
+    fun saveImage(bookId: String, pageNumber: Int, bytes: ByteArray): String {
+        clearPageImageVariants(bookId, pageNumber)
+        val isJpeg = bytes.size >= 3 &&
+            bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xD8.toByte() &&
+            bytes[2] == 0xFF.toByte()
+        val file = if (isJpeg) {
+            pageImageFileJpg(bookId, pageNumber)
+        } else {
+            pageImageFile(bookId, pageNumber)
+        }
+        file.parentFile?.mkdirs()
+        file.writeBytes(bytes)
+        return file.absolutePath
+    }
+
+    private fun clearPageImageVariants(bookId: String, pageNumber: Int) {
+        pageImageFile(bookId, pageNumber).delete()
+        pageImageFileJpg(bookId, pageNumber).delete()
     }
 
     fun savePlaceholder(
@@ -79,6 +109,7 @@ class BookFileStore(private val context: Context) {
         drawWrapped(canvas, pageText.take(120) + if (pageText.length > 120) "…" else "", w / 2f, 320f, w - 120f, bodyPaint)
         canvas.drawText("Illustration pending", w / 2f, h - 60f, labelPaint)
 
+        clearPageImageVariants(bookId, pageNumber)
         val file = pageImageFile(bookId, pageNumber)
         file.parentFile?.mkdirs()
         FileOutputStream(file).use { out ->

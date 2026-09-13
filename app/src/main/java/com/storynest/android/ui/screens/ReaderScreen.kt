@@ -1,5 +1,6 @@
 package com.storynest.android.ui.screens
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,8 +48,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.storynest.android.data.model.PageDetail
+import com.storynest.android.ui.theme.Cream
 import com.storynest.android.ui.theme.MoonCream
 import com.storynest.android.ui.theme.NightInk
+import com.storynest.android.ui.theme.SoftCoral
+import com.storynest.android.ui.theme.WarmInk
 import com.storynest.android.viewmodel.ReaderViewModel
 import java.io.File
 
@@ -65,8 +69,9 @@ fun ReaderScreen(
     var showRegen by remember { mutableStateOf(false) }
 
     val night = ui.nightMode
-    val bg = if (night) NightInk else Color(0xFFFFF8EE)
-    val fg = if (night) MoonCream else Color(0xFF2A2040)
+    // Soft cream pages by day; cozy night ink at bedtime.
+    val bg = if (night) NightInk else Cream
+    val fg = if (night) MoonCream else WarmInk
 
     LaunchedEffect(ui.error) {
         if (ui.error == "API_KEY_REQUIRED") {
@@ -122,7 +127,7 @@ fun ReaderScreen(
                     .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = SoftCoral)
             }
         } else {
             val pagerState = rememberPagerState(pageCount = { pages.size })
@@ -139,7 +144,7 @@ fun ReaderScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        CircularProgressIndicator(Modifier.height(18.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.height(18.dp), strokeWidth = 2.dp, color = SoftCoral)
                         Text(ui.status ?: "Updating…", color = fg, fontSize = 13.sp)
                     }
                 } else if (ui.status != null) {
@@ -167,7 +172,7 @@ fun ReaderScreen(
                     PageContent(page = pages[index], textColor = fg, night = night)
                 }
                 Text(
-                    "Page ${pagerState.currentPage + 1} of ${pages.size} · swipe",
+                    "Page ${pagerState.currentPage + 1} of ${pages.size} · swipe 👈👉",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
@@ -210,6 +215,10 @@ fun ReaderScreen(
 
 @Composable
 private fun PageContent(page: PageDetail, textColor: Color, night: Boolean) {
+    val frameShape = RoundedCornerShape(28.dp)
+    val frameBg = if (night) Color(0xFF2F2748) else Color(0xFFFFF0E0)
+    val frameBorder = if (night) Color(0xFF4A3F6A) else SoftCoral.copy(alpha = 0.35f)
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -221,15 +230,18 @@ private fun PageContent(page: PageDetail, textColor: Color, night: Boolean) {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(320.dp)
-                .clip(RoundedCornerShape(20.dp))
-                .background(if (night) Color(0xFF2F2748) else Color(0xFFEFE4D4))
+                .clip(frameShape)
+                .background(frameBg)
+                .border(3.dp, frameBorder, frameShape)
         ) {
             val path = page.imagePath
             if (path != null && File(path).exists()) {
                 AsyncImage(
                     model = File(path),
                     contentDescription = "Page illustration",
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(frameShape),
                     contentScale = ContentScale.Crop
                 )
             }
@@ -238,8 +250,8 @@ private fun PageContent(page: PageDetail, textColor: Color, night: Boolean) {
                     "Placeholder art",
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(8.dp)
-                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+                        .padding(10.dp)
+                        .background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 8.dp, vertical = 4.dp),
                     color = Color.White,
                     fontSize = 11.sp

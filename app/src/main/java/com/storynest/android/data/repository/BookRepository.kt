@@ -10,6 +10,7 @@ import com.storynest.android.data.model.CreateBookRequest
 import com.storynest.android.data.model.PageDetail
 import com.storynest.android.data.prefs.SettingsRepository
 import com.storynest.android.data.remote.GeminiApiClient
+import com.storynest.android.data.remote.PollinationsApiClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -19,7 +20,8 @@ class BookRepository(
     private val dao: BookDao,
     private val files: BookFileStore,
     private val settings: SettingsRepository,
-    private val gemini: GeminiApiClient = GeminiApiClient()
+    private val gemini: GeminiApiClient = GeminiApiClient(),
+    private val pollinations: PollinationsApiClient = PollinationsApiClient()
 ) {
     fun observeLibrary(): Flow<List<BookSummary>> =
         dao.observeBooks().map { list ->
@@ -79,6 +81,101 @@ class BookRepository(
         val warning: String? = null
     )
 
+    private data class PageImageOutcome(
+        val path: String,
+        val isPlaceholder: Boolean,
+        val usedPollinations: Boolean,
+        val warning: String? = null
+    )
+
+    /**
+     * Image pipeline per page:
+     * 1) Gemini image models
+     * 2) Pollinations.ai backup (free, rate-limited)
+     * 3) Local placeholder
+     */
+    private suspend fun resolvePageImage(
+        apiKey: String,
+        bookId: String,
+        title: String,
+        characterCard: String,
+        scene: String,
+        pageText: String,
+        pageNum: Int,
+        totalPages: Int,
+        needPollinationsGap: Boolean,
+        onProgress: (GenerationProgress) -> Unit,
+        currentWarning: String?
+    ): PageImageOutcome {
+        // a) Gemini
+        onProgress(
+            GenerationProgress(
+                stage = "Drawing page $pageNum…",
+                currentPage = pageNum,
+                totalPages = totalPages,
+                warning = currentWarning
+            )
+        )
+        try {
+            val img = gemini.generatePageImage(apiKey, characterCard, scene, pageNum)
+            if (img != null && img.bytes.isNotEmpty()) {
+                val path = files.saveImage(bookId, pageNum, img.bytes)
+                return PageImageOutcome(path, isPlaceholder = false, usedPollinations = false)
+            }
+        } catch (e: GeminiApiClient.GeminiException.QuotaExceeded) {
+            // fall through to Pollinations
+        } catch (_: Exception) {
+            // fall through to Pollinations
+        }
+
+        // b) Pollinations backup
+        if (needPollinationsGap) {
+            onProgress(
+                GenerationProgress(
+                    stage = "Finding a backup artist…",
+                    currentPage = pageNum,
+                    totalPages = totalPages,
+                    warning = currentWarning
+                )
+            )
+            delay(PollinationsApiClient.CALL_GAP_MS)
+        }
+        onProgress(
+            GenerationProgress(
+                stage = "Drawing page $pageNum… (backup artist)",
+                currentPage = pageNum,
+                totalPages = totalPages,
+                warning = currentWarning
+                    ?: "Using free Pollinations backup for pictures (Gemini image unavailable)."
+            )
+        )
+        try {
+            val backup = pollinations.generateImage(characterCard, scene, pageNum)
+            if (backup != null && backup.bytes.isNotEmpty()) {
+                val path = files.saveImage(bookId, pageNum, backup.bytes)
+                return PageImageOutcome(
+                    path = path,
+                    isPlaceholder = false,
+                    usedPollinations = true,
+                    warning = "Some or all pictures used the free Pollinations backup " +
+                        "(Gemini image quota unavailable). Style may vary; a watermark is possible."
+                )
+            }
+        } catch (_: Exception) {
+            // fall through to placeholder
+        }
+
+        // c) Placeholder
+        val path = files.savePlaceholder(bookId, pageNum, title, pageText)
+        return PageImageOutcome(
+            path = path,
+            isPlaceholder = true,
+            usedPollinations = false,
+            warning = "Pictures unavailable right now. Story text is saved with cozy placeholders. " +
+                "Gemini image quota may be exhausted; Pollinations backup also failed."
+        )
+    }
+
     /**
      * Full pipeline: story JSON → character/style lock → per-page images → Room + files.
      */
@@ -91,120 +188,54 @@ class BookRepository(
             return Result.failure(GeminiApiClient.GeminiException.MissingApiKey())
         }
         return try {
-            onProgress(GenerationProgress("Writing your story…"))
+            onProgress(GenerationProgress("Writing your story… ✍️"))
             val story = gemini.generateStory(apiKey, request)
             val bookId = UUID.randomUUID().toString()
             val styleLock = GeminiApiClient.STYLE_LOCK
             var imageWarning: String? = null
             var anyRealImage = false
+            var usedPollinationsBefore = false
             val pageEntities = mutableListOf<PageEntity>()
 
             story.pages.forEachIndexed { index, page ->
                 val pageNum = index + 1
-                if (index > 0) {
+                if (index > 0 && !usedPollinationsBefore) {
+                    // Only apply Gemini gap when still on Gemini path between pages
                     delay(GeminiApiClient.IMAGE_CALL_GAP_MS)
                 }
-                onProgress(
-                    GenerationProgress(
-                        stage = "Illustrating page $pageNum of ${story.pages.size}…",
-                        currentPage = pageNum,
-                        totalPages = story.pages.size,
-                        warning = imageWarning
-                    )
-                )
                 val scene = page.imagePrompt.ifBlank { page.text }
-                var imagePath: String
-                var isPlaceholder = false
-                try {
-                    val img = gemini.generatePageImage(apiKey, story.characterCard, scene, pageNum)
-                    if (img != null) {
-                        imagePath = files.savePng(bookId, pageNum, img.bytes)
-                        anyRealImage = true
-                    } else {
-                        imagePath = files.savePlaceholder(bookId, pageNum, story.title, page.text)
-                        isPlaceholder = true
-                        imageWarning =
-                            "Pictures unavailable right now. Story text is saved with cozy placeholders. " +
-                                "Free-tier Gemini often has no image quota — enable billing at https://aistudio.google.com " +
-                                "or check https://ai.dev/rate-limit"
-                    }
-                } catch (e: GeminiApiClient.GeminiException.QuotaExceeded) {
-                    imagePath = files.savePlaceholder(bookId, pageNum, story.title, page.text)
-                    isPlaceholder = true
-                    imageWarning = e.message ?: GeminiApiClient.QUOTA_IMAGE_HELP
-                    // Fill remaining with placeholders quickly
-                    pageEntities.add(
-                        PageEntity(
-                            bookId = bookId,
-                            pageNumber = pageNum,
-                            text = page.text,
-                            imagePath = imagePath,
-                            imagePrompt = scene,
-                            isPlaceholder = true
-                        )
-                    )
-                    for (rest in (pageNum + 1)..story.pages.size) {
-                        val p = story.pages[rest - 1]
-                        val path = files.savePlaceholder(bookId, rest, story.title, p.text)
-                        pageEntities.add(
-                            PageEntity(
-                                bookId = bookId,
-                                pageNumber = rest,
-                                text = p.text,
-                                imagePath = path,
-                                imagePrompt = p.imagePrompt.ifBlank { p.text },
-                                isPlaceholder = true
-                            )
-                        )
-                    }
-                    // break out early
-                    val cover = pageEntities.firstOrNull()?.imagePath
-                    dao.insertBookWithPages(
-                        BookEntity(
-                            id = bookId,
-                            title = story.title,
-                            createdAt = System.currentTimeMillis(),
-                            ageBand = request.ageBand.label,
-                            mood = request.mood.label,
-                            characterCard = story.characterCard,
-                            styleLock = styleLock,
-                            coverPath = cover,
-                            pageCount = pageEntities.size
-                        ),
-                        pageEntities
-                    )
-                    onProgress(
-                        GenerationProgress(
-                            stage = "Done (with quota limits)",
-                            currentPage = pageEntities.size,
-                            totalPages = pageEntities.size,
-                            warning = imageWarning
-                        )
-                    )
-                    return Result.success(bookId)
-                } catch (e: Exception) {
-                    imagePath = files.savePlaceholder(bookId, pageNum, story.title, page.text)
-                    isPlaceholder = true
-                    imageWarning = "Illustration issue: ${e.message}. Placeholders used where needed."
-                }
+                val outcome = resolvePageImage(
+                    apiKey = apiKey,
+                    bookId = bookId,
+                    title = story.title,
+                    characterCard = story.characterCard,
+                    scene = scene,
+                    pageText = page.text,
+                    pageNum = pageNum,
+                    totalPages = story.pages.size,
+                    needPollinationsGap = usedPollinationsBefore,
+                    onProgress = onProgress,
+                    currentWarning = imageWarning
+                )
+                if (outcome.usedPollinations) usedPollinationsBefore = true
+                if (!outcome.isPlaceholder) anyRealImage = true
+                if (outcome.warning != null) imageWarning = outcome.warning
 
                 pageEntities.add(
                     PageEntity(
                         bookId = bookId,
                         pageNumber = pageNum,
                         text = page.text,
-                        imagePath = imagePath,
+                        imagePath = outcome.path,
                         imagePrompt = scene,
-                        isPlaceholder = isPlaceholder
+                        isPlaceholder = outcome.isPlaceholder
                     )
                 )
             }
 
             if (!anyRealImage && imageWarning == null) {
                 imageWarning =
-                    "Could not generate pictures (image models failed or free-tier image quota is 0). " +
-                        "Story text is saved with placeholders. Enable billing / image quota at " +
-                        "https://aistudio.google.com or see https://ai.dev/rate-limit"
+                    "Could not generate pictures. Story text is saved with placeholders."
             }
 
             val cover = pageEntities.firstOrNull()?.imagePath
@@ -224,7 +255,7 @@ class BookRepository(
             )
             onProgress(
                 GenerationProgress(
-                    stage = "Saved to your library",
+                    stage = "Saved to your nest!",
                     currentPage = pageEntities.size,
                     totalPages = pageEntities.size,
                     warning = imageWarning
@@ -251,7 +282,7 @@ class BookRepository(
             var text = page.text
             var imagePrompt = page.imagePrompt
             if (alsoRewriteText) {
-                onProgress("Rewriting page text…")
+                onProgress("Rewriting page text… ✍️")
                 val pair = gemini.regeneratePageText(
                     apiKey = apiKey,
                     title = book.title,
@@ -264,12 +295,28 @@ class BookRepository(
                 text = pair.first
                 imagePrompt = pair.second
             }
-            onProgress("Redrawing illustration…")
-            val img = gemini.generatePageImage(apiKey, book.characterCard, imagePrompt.ifBlank { text }, pageNumber)
-            val (path, placeholder) = if (img != null) {
-                files.savePng(bookId, pageNumber, img.bytes) to false
-            } else {
-                files.savePlaceholder(bookId, pageNumber, book.title, text) to true
+            onProgress("Drawing this page again… 🎨")
+            val scene = imagePrompt.ifBlank { text }
+            var path: String
+            var placeholder: Boolean
+            try {
+                val img = gemini.generatePageImage(apiKey, book.characterCard, scene, pageNumber)
+                if (img != null && img.bytes.isNotEmpty()) {
+                    path = files.saveImage(bookId, pageNumber, img.bytes)
+                    placeholder = false
+                } else {
+                    throw GeminiApiClient.GeminiException.ApiError("empty")
+                }
+            } catch (_: Exception) {
+                onProgress("Drawing with backup artist… 🎨")
+                val backup = pollinations.generateImage(book.characterCard, scene, pageNumber)
+                if (backup != null && backup.bytes.isNotEmpty()) {
+                    path = files.saveImage(bookId, pageNumber, backup.bytes)
+                    placeholder = false
+                } else {
+                    path = files.savePlaceholder(bookId, pageNumber, book.title, text)
+                    placeholder = true
+                }
             }
             dao.updatePage(
                 page.copy(

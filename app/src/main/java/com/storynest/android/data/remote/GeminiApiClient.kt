@@ -81,8 +81,8 @@ class GeminiApiClient {
 
         const val QUOTA_IMAGE_HELP =
             "Free-tier Gemini image quota is exhausted or rate-limited. " +
-                "Story text is saved. To get real pictures, enable billing / raise image limits at " +
-                "https://aistudio.google.com or https://ai.dev/rate-limit"
+                "StoryNest will try the free Pollinations backup, then placeholders if needed. " +
+                "Raise Gemini image limits at https://aistudio.google.com or https://ai.dev/rate-limit"
     }
 
     sealed class GeminiException(message: String, cause: Throwable? = null) : Exception(message, cause) {

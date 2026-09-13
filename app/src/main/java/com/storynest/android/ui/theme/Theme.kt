@@ -1,6 +1,5 @@
 package com.storynest.android.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -12,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/** Soft night palette — used by the reader bedtime toggle. */
 val NightInk = Color(0xFF1A1528)
 val NightSurface = Color(0xFF241E38)
 val NightCard = Color(0xFF2F2748)
@@ -19,6 +19,20 @@ val MoonCream = Color(0xFFF5E6C8)
 val SoftGold = Color(0xFFE8B86D)
 val Lavender = Color(0xFFB8A8E8)
 val Mist = Color(0xFF9A90B8)
+
+/** Cheerful daytime storybook accents. */
+val SkyBlue = Color(0xFF7EC8E3)
+val SoftCoral = Color(0xFFFF8A9A)
+val SoftPink = Color(0xFFFFB6C8)
+val Mint = Color(0xFF8FD9B6)
+val Cream = Color(0xFFFFF8EE)
+val SunnyYellow = Color(0xFFFFD56A)
+val WarmInk = Color(0xFF3D2C5A)
+val CardPeach = Color(0xFFFFE8DE)
+val CardMint = Color(0xFFE4F7EF)
+val CardSky = Color(0xFFE3F4FB)
+val CardLavender = Color(0xFFF0E8FF)
+val CardSunny = Color(0xFFFFF4D6)
 
 private val DarkColors = darkColorScheme(
     primary = SoftGold,
@@ -37,17 +51,29 @@ private val DarkColors = darkColorScheme(
     onError = NightInk
 )
 
+/** Bright, playful default for kids (~9) + parents. */
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF5B4A8A),
+    primary = Color(0xFFFF6B81),
     onPrimary = Color.White,
-    secondary = Color(0xFF7A5A2A),
+    secondary = Color(0xFF4DB8D9),
     onSecondary = Color.White,
-    background = Color(0xFFFFF8EE),
-    onBackground = Color(0xFF2A2040),
+    tertiary = Color(0xFF5ECF9A),
+    onTertiary = Color.White,
+    background = Cream,
+    onBackground = WarmInk,
     surface = Color(0xFFFFFCF6),
-    onSurface = Color(0xFF2A2040),
-    surfaceVariant = Color(0xFFF0E6D8),
-    onSurfaceVariant = Color(0xFF5A5068)
+    onSurface = WarmInk,
+    surfaceVariant = CardPeach,
+    onSurfaceVariant = Color(0xFF6B5A7A),
+    outline = Color(0xFFD4C4B0),
+    error = Color(0xFFD64545),
+    onError = Color.White,
+    primaryContainer = SoftPink,
+    onPrimaryContainer = WarmInk,
+    secondaryContainer = CardSky,
+    onSecondaryContainer = WarmInk,
+    tertiaryContainer = CardMint,
+    onTertiaryContainer = WarmInk
 )
 
 private val StoryTypography = Typography(
@@ -93,12 +119,12 @@ private val StoryTypography = Typography(
 
 @Composable
 fun StoryNestTheme(
-    darkTheme: Boolean = true, // cozy night-reader default
+    darkTheme: Boolean = false, // cheerful daytime kids UI by default
     content: @Composable () -> Unit
 ) {
-    val forceNight = darkTheme || isSystemInDarkTheme()
+    // App chrome is bright/storybook. Reader uses its own soft night toggle.
     MaterialTheme(
-        colorScheme = if (forceNight) DarkColors else LightColors,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = StoryTypography,
         content = content
     )
