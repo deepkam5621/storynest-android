@@ -30,30 +30,36 @@ class PollinationsApiClient {
         private const val TAG = "PollinationsApi"
         const val CALL_GAP_MS = 16_000L
         private const val USER_AGENT = "StoryNest/1.0 (Android; children's picture books)"
+
+        private const val NEGATIVE_PROMPT =
+            "photorealistic, photo, realistic skin, 3D render, CGI, Unreal Engine, " +
+                "cinematic still, blurry, soft focus, muddy, low quality, deformed hands, " +
+                "melted fingers, extra limbs, scary, horror, text, watermark, logo, anime, manga"
     }
 
     data class ImageResult(val bytes: ByteArray, val contentType: String?)
 
     fun buildPrompt(characterCard: String, pageScene: String, pageNumber: Int, pageText: String = ""): String {
-        val style = GeminiApiClient.STYLE_LOCK
         val scene = pageScene.ifBlank { pageText }.ifBlank { "page $pageNumber of a children's bedtime story" }
-        val textHint = pageText.trim().take(180)
-        // SCENE FIRST so each page differs; keep character lock shorter.
+        val textHint = pageText.trim().take(160)
+        // SCENE FIRST so each page differs; force 2D Storybook look (not photoreal / 3D).
         return buildString {
-            append("UNIQUE SCENE FOR PAGE $pageNumber ONLY (do not reuse other pages): ")
+            append("2D flat children's picture-book illustration like Google Gemini Storybook. ")
+            append("Soft watercolor and gouache, pastel colors, simple shapes, friendly cartoon faces, ")
+            append("hand-drawn storybook look, NOT photorealistic, NOT 3D, NOT CGI, NOT cinematic photo. ")
+            append("UNIQUE SCENE FOR PAGE $pageNumber ONLY: ")
             append(scene)
             append(". ")
             if (textHint.isNotBlank()) {
-                append("Story text on this page: ")
+                append("Include the key story moment from this page text: ")
                 append(textHint)
                 append(". ")
             }
-            append("Characters (same cast, this moment only): ")
-            append(characterCard.take(280))
+            append("Same cast for this moment: ")
+            append(characterCard.take(240))
             append(". ")
-            append("Style: children's soft watercolor picture-book, kid-friendly, wholesome, pastel, ")
-            append(style.take(200))
-            append(". Full-bleed illustration, no text letters logos watermarks, not scary.")
+            append(GeminiApiClient.STYLE_LOCK.take(220))
+            append(" Full-bleed page art, clear subjects, sharp enough for kids, no text letters logos watermarks.")
         }.replace(Regex("\\s+"), " ").trim()
     }
 
@@ -84,6 +90,7 @@ class PollinationsApiClient {
             .addQueryParameter("enhance", "false")
             .addQueryParameter("seed", seed.toString())
             .addQueryParameter("private", "true")
+            .addQueryParameter("negative_prompt", NEGATIVE_PROMPT)
             .build()
 
         val request = Request.Builder()

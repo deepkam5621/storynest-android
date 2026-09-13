@@ -71,12 +71,12 @@ class GeminiApiClient {
         const val IMAGE_CALL_GAP_MS = 1750L
 
         val STYLE_LOCK = """
-            Soft Western children's picture-book illustration style.
-            Warm watercolor and soft gouache textures, gentle rounded shapes,
-            cozy pastel lighting, friendly expressive faces with NORMAL human/animal eyes
-            (not oversized anime dot-eyes, not manga, not photorealistic, not 3D CGI).
-            Suitable for a printed bedtime picture book. No text overlays in the image.
-            Age-appropriate, calm, wholesome, cartoon-only.
+            Soft 2D Western children's picture-book illustration like Google Gemini Storybook.
+            Warm watercolor and soft gouache, flat gentle shapes, cozy pastel lighting,
+            friendly expressive cartoon faces with NORMAL human/animal eyes
+            (not oversized anime dot-eyes, not manga, not photorealistic, not 3D CGI, not cinematic photo).
+            Clear readable subjects for kids; suitable for a printed bedtime picture book.
+            No text overlays in the image. Age-appropriate, calm, wholesome, 2D cartoon-only.
         """.trimIndent().replace('\n', ' ')
 
         const val QUOTA_IMAGE_HELP =
@@ -197,11 +197,11 @@ class GeminiApiClient {
 
     private fun buildImagePrompt(characterCard: String, pageScene: String, pageNumber: Int): String =
         """
-        Create one children's picture-book illustration for page $pageNumber.
+        Create one 2D children's picture-book illustration for page $pageNumber (Gemini Storybook style).
         STYLE LOCK (must follow): $STYLE_LOCK
         CHARACTER CARD (keep consistent): $characterCard
-        SCENE: $pageScene
-        Single full-bleed illustration, no speech bubbles, no written words, no watermarks.
+        SCENE (show this exact moment, including important animals/objects named): $pageScene
+        Single full-bleed 2D illustration, no speech bubbles, no written words, no watermarks.
         """.trimIndent()
 
     private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String {
