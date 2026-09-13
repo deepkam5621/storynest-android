@@ -150,7 +150,7 @@ class BookRepository(
             )
         )
         try {
-            val backup = pollinations.generateImage(characterCard, scene, pageNum)
+            val backup = pollinations.generateImage(characterCard, scene, pageNum, pageText)
             if (backup != null && backup.bytes.isNotEmpty()) {
                 val path = files.saveImage(bookId, pageNum, backup.bytes)
                 return PageImageOutcome(
@@ -309,7 +309,7 @@ class BookRepository(
                 }
             } catch (_: Exception) {
                 onProgress("Drawing with backup artist… 🎨")
-                val backup = pollinations.generateImage(book.characterCard, scene, pageNumber)
+                val backup = pollinations.generateImage(book.characterCard, scene, pageNumber, text)
                 if (backup != null && backup.bytes.isNotEmpty()) {
                     path = files.saveImage(bookId, pageNumber, backup.bytes)
                     placeholder = false
