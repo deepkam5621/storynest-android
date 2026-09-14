@@ -4,6 +4,7 @@ import android.util.Base64
 import android.util.Log
 import com.storynest.android.data.model.AgeBand
 import com.storynest.android.data.model.CreateBookRequest
+import com.storynest.android.data.model.StoryLanguage
 import com.storynest.android.data.model.GeneratedPage
 import com.storynest.android.data.model.GeneratedStory
 import com.storynest.android.data.model.StoryMood
@@ -103,14 +104,14 @@ class GeminiApiClient {
     suspend fun generateStory(apiKey: String, request: CreateBookRequest): GeneratedStory =
         withContext(Dispatchers.IO) {
             requireKey(apiKey)
-            val system = buildSystemPrompt(request.ageBand, request.mood, request.length.pages)
+            val system = buildSystemPrompt(request.ageBand, request.mood, request.length.pages, request.language)
             val user = buildUserPrompt(request)
             val text = generateTextWithFallback(apiKey, system, user, temperature = 1.05)
             var story = parseStoryJson(text, request.length.pages)
             if (isThinStory(story, request.ageBand)) {
                 Log.i(TAG, "Story text looks thin — running one enrich rewrite pass")
                 try {
-                    val enrichSystem = buildEnrichSystemPrompt(request.ageBand, request.mood, request.length.pages)
+                    val enrichSystem = buildEnrichSystemPrompt(request.ageBand, request.mood, request.length.pages, request.language)
                     val enrichUser = buildEnrichUserPrompt(story, request)
                     val enriched = generateTextWithFallback(apiKey, enrichSystem, enrichUser, temperature = 1.0)
                     story = parseStoryJson(enriched, request.length.pages)
@@ -204,7 +205,7 @@ class GeminiApiClient {
         Single full-bleed 2D illustration, no speech bubbles, no written words, no watermarks.
         """.trimIndent()
 
-    private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String {
+    private fun buildSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int, language: StoryLanguage): String {
         val pageLength = when (age) {
             AgeBand.AGES_3_5 ->
                 "For ages 3–5: each page has 2–4 short, clear sentences with concrete words a young child can picture. Readable aloud with warmth — not one-breath stubs."
@@ -214,62 +215,83 @@ class GeminiApiClient {
                 "For ages 9–10: each page has 4–7 sentences with engaging detail, dialogue or inner thought when natural, mild mystery or curiosity, still cozy enough for bedtime."
             AgeBand.AGES_11_12 ->
                 "For ages 11–12: each page has 5–8 sentences with stronger voice and plot, richer description, gentle stakes resolved warmly — never graphic, romantic, or nightmare fuel."
+            AgeBand.TEENS_13_17 ->
+                "For teens 13–17: each page has 6–10 sentences with richer voice, real feelings, and gentle stakes — wholesome and bedtime-safe."
+            AgeBand.ADULTS_18 ->
+                "For adults: each page has 7–12 sentences of polished illustrated-story prose — thoughtful, sensory, warm; never graphic or erotic."
+        }
+        val bookKind = when (age) {
+            AgeBand.ADULTS_18, AgeBand.TEENS_13_17 ->
+                "illustrated bedtime short stories (picture-book style pages adults/teens enjoy)"
+            else ->
+                "children's bedtime picture books"
         }
         return """
-            You are StoryNest, an award-winning author-illustrator team that writes children's bedtime picture books
+            You are StoryNest, an award-winning author-illustrator team that writes $bookKind
             in the spirit of classic gem-quality picture books (think vivid scenes, heart, and a clear arc —
             never vague filler like "they felt happy" with no action).
 
             Audience: ${age.promptHint}.
             Mood: ${mood.promptHint}.
-            Exactly $pages pages. Gentle endings. No gore, horror, romance, bullying, or scary villains.
+            Exactly $pages pages. Gentle endings. No gore, horror, explicit romance, bullying, or scary villains.
             Soften conflict; keep everything safe and reassuring for bedtime.
+
+            LANGUAGE RULE (mandatory — do not ignore):
+            - Story language: ${language.promptName}.
+            - ${language.scriptHint}.
+            - The JSON fields "title" and every pages[]."text" MUST be written entirely in ${language.promptName}.
+            - Do NOT write English page text when another language is selected (even if the parent's idea is in English).
+            - Do NOT use Roman/Latin transliteration for Indian languages — use the native script.
+            - characterCard and every pages[].imagePrompt MUST stay in clear English (for the illustrator / image model).
 
             STORYCRAFT (required):
             - Clear plot arc across the book: setup → a gentle wish or small problem → soft adventure / trying → cozy resolution and bedtime comfort.
             - Every page has a distinct purpose (introduce world, show the wish, first step, discovery, turning point, help from a friend, quiet win, snuggle home).
             - Vivid sensory detail: what they see, hear, touch, smell — concrete settings and actions, not abstract emotion-only lines.
-            - Emotional warmth and memorable moments a parent will enjoy reading aloud.
-            - Memorable title (specific and charming, not generic like "A Fun Day").
-            - characterCard: FIXED look lock for illustrations — species/kind, hair/fur color & style, clothing colors & items, size, signature props. Same details every page.
-            - Each imagePrompt: a concrete visual scene that MATCHES that page's text (who, where, pose, props, time-of-day/lighting). No style words — style is applied separately.
+            - Emotional warmth and memorable moments enjoyable to read aloud.
+            - Memorable title in ${language.promptName} (specific and charming, not generic).
+            - characterCard: FIXED look lock for illustrations — species/kind, hair/fur color & style, clothing colors & items, size, signature props. Same details every page. (English)
+            - Each imagePrompt: a concrete visual scene that MATCHES that page's text (who, where, pose, props, time-of-day/lighting). No style words — style is applied separately. (English)
 
             PAGE TEXT LENGTH:
             $pageLength
-            Do NOT use vague filler. Prefer specific verbs and settings ("climbed the mossy garden wall", "whispered to the sleepy moon").
+            Do NOT use vague filler. Prefer specific verbs and settings.
 
             Output ONLY valid JSON matching the schema the user provides. No markdown fences, no commentary.
         """.trimIndent()
     }
 
     private fun buildUserPrompt(request: CreateBookRequest): String = """
-        Story idea from parent: ${request.idea.trim()}
+        Story idea from parent (may be in any language — write the BOOK in the selected language): ${request.idea.trim()}
 
-        Write a complete picture book with exactly ${request.length.pages} pages.
+        Selected story language: ${request.language.promptName}. ${request.language.scriptHint}.
+        Write a complete illustrated bedtime book with exactly ${request.length.pages} pages.
         Make it feel like a real bedtime picture book: clear arc, sensory detail, distinct page purposes, cozy ending.
-        Invent a memorable title and a detailed characterCard (hair/fur, clothes, colors, species/kind, props).
+        Invent a memorable title IN ${request.language.promptName} and a detailed characterCard in English (hair/fur, clothes, colors, species/kind, props).
+        Every pages[].text MUST be entirely in ${request.language.promptName} (native script). Every imagePrompt MUST be English.
 
         Return ONLY valid JSON matching this schema (no markdown fences):
         {
-          "title": "memorable specific title",
-          "characterCard": "fixed look details: species/kind, hair or fur, clothing colors, signature props — enough to keep every illustration consistent",
+          "title": "memorable specific title in ${request.language.promptName}",
+          "characterCard": "ENGLISH fixed look details: species/kind, hair or fur, clothing colors, signature props — enough to keep every illustration consistent",
           "pages": [
             {
               "pageNumber": 1,
-              "text": "age-appropriate vivid page story text (length per system rules for this age band)",
-              "imagePrompt": "concrete visual scene for THIS page only matching the text (setting, characters, action, lighting) — no style words"
+              "text": "age-appropriate vivid page story text ENTIRELY in ${request.language.promptName}",
+              "imagePrompt": "ENGLISH concrete visual scene for THIS page only matching the text (setting, characters, action, lighting) — no style words"
             }
           ]
         }
     """.trimIndent()
 
-    private fun buildEnrichSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int): String = """
-        You improve a children's bedtime picture-book draft that is too thin or vague.
+    private fun buildEnrichSystemPrompt(age: AgeBand, mood: StoryMood, pages: Int, language: StoryLanguage): String = """
+        You improve a bedtime picture-book draft that is too thin or vague.
         Keep the same characters, title idea, and overall plot — but enrich every page with
         vivid sensory detail, concrete actions/settings, and a clear arc (setup → wish/problem →
         gentle adventure → cozy resolution). Mood: ${mood.promptHint}. Audience: ${age.promptHint}.
-        Exactly $pages pages. Keep characterCard fixed-look details. Each imagePrompt must match its page text.
-        Return ONLY the same JSON schema. No markdown.
+        Exactly $pages pages. Keep characterCard fixed-look details in English. Each imagePrompt (English) must match its page text.
+        LANGUAGE: title and every page text MUST remain entirely in ${language.promptName} (${language.scriptHint}).
+        Never switch page text to English. Return ONLY the same JSON schema. No markdown.
     """.trimIndent()
 
     private fun buildEnrichUserPrompt(story: GeneratedStory, request: CreateBookRequest): String {
@@ -286,7 +308,7 @@ class GeminiApiClient {
                 $pagesJson
               ]
             }
-            Rewrite so each page has richer readable-aloud text and a concrete imagePrompt. Same page count (${request.length.pages}).
+            Rewrite so each page has richer readable-aloud text IN ${request.language.promptName} and a concrete English imagePrompt. Same page count (${request.length.pages}).
         """.trimIndent()
     }
 
@@ -297,6 +319,8 @@ class GeminiApiClient {
             AgeBand.AGES_6_8 -> 90
             AgeBand.AGES_9_10 -> 140
             AgeBand.AGES_11_12 -> 180
+            AgeBand.TEENS_13_17 -> 220
+            AgeBand.ADULTS_18 -> 260
         }
         val shortPages = story.pages.count { it.text.trim().length < minChars }
         val avg = story.pages.map { it.text.trim().length }.average()

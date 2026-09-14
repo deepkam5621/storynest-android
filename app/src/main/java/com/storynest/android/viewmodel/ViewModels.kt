@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.storynest.android.data.model.AgeBand
+import com.storynest.android.data.model.StoryLanguage
 import com.storynest.android.data.model.BookDetail
 import com.storynest.android.data.model.BookSummary
 import com.storynest.android.data.model.CreateBookRequest
@@ -67,6 +68,7 @@ class CreateBookViewModel(
 ) : ViewModel() {
     var idea: String = ""
     var ageBand: AgeBand = AgeBand.AGES_9_10
+    var language: StoryLanguage = StoryLanguage.ENGLISH
     var length: StoryLength = StoryLength.SHORT
     var mood: StoryMood = StoryMood.COZY
 
@@ -88,7 +90,7 @@ class CreateBookViewModel(
             _state.value = CreateUiState.Error("Please enter a short story idea first.")
             return
         }
-        val request = CreateBookRequest(idea.trim(), ageBand, length, mood)
+        val request = CreateBookRequest(idea.trim(), ageBand, length, mood, language)
         viewModelScope.launch {
             _state.value = CreateUiState.Running
             var lastWarning: String? = null

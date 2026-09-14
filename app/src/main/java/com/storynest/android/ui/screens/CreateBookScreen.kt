@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.storynest.android.data.model.AgeBand
+import com.storynest.android.data.model.StoryLanguage
 import com.storynest.android.data.model.StoryLength
 import com.storynest.android.data.model.StoryMood
 import com.storynest.android.ui.theme.CardLavender
@@ -54,6 +55,18 @@ private fun ageChipLabel(band: AgeBand): String = when (band) {
     AgeBand.AGES_6_8 -> "🦊 6–8"
     AgeBand.AGES_9_10 -> "⭐ 9–10"
     AgeBand.AGES_11_12 -> "🚀 11–12"
+    AgeBand.TEENS_13_17 -> "🌙 13–17"
+    AgeBand.ADULTS_18 -> "☕ Grown-ups"
+}
+
+private fun languageChipLabel(lang: StoryLanguage): String = when (lang) {
+    StoryLanguage.ENGLISH -> "🇬🇧 English"
+    StoryLanguage.MARATHI -> "🇮🇳 मराठी"
+    StoryLanguage.HINDI -> "🇮🇳 हिन्दी"
+    StoryLanguage.TAMIL -> "🇮🇳 தமிழ்"
+    StoryLanguage.TELUGU -> "🇮🇳 తెలుగు"
+    StoryLanguage.KANNADA -> "🇮🇳 ಕನ್ನಡ"
+    StoryLanguage.GUJARATI -> "🇮🇳 ગુજરાતી"
 }
 
 private fun lengthChipLabel(length: StoryLength): String = when (length) {
@@ -78,6 +91,7 @@ fun CreateBookScreen(
 ) {
     var idea by remember { mutableStateOf(viewModel.idea) }
     var age by remember { mutableStateOf(viewModel.ageBand) }
+    var language by remember { mutableStateOf(viewModel.language) }
     var length by remember { mutableStateOf(viewModel.length) }
     var mood by remember { mutableStateOf(viewModel.mood) }
     var localError by remember { mutableStateOf<String?>(null) }
@@ -161,6 +175,26 @@ fun CreateBookScreen(
                 }
             }
 
+            Text("Story language 🗣️", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                "Pick the language for the story text (pictures stay the same).",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StoryLanguage.entries.forEach { option ->
+                    PlayfulChip(
+                        selected = language == option,
+                        label = languageChipLabel(option),
+                        selectedColor = CardLavender,
+                        onClick = { language = option }
+                    )
+                }
+            }
+
             Text("How long? 📏", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -208,6 +242,7 @@ fun CreateBookScreen(
                     }
                     viewModel.idea = idea.trim()
                     viewModel.ageBand = age
+                    viewModel.language = language
                     viewModel.length = length
                     viewModel.mood = mood
                     viewModel.startGeneration()
